@@ -1937,18 +1937,20 @@ class FusedMoE(CustomOp):
             extra_tensors = None
             hidden_states_to_dispatch = hidden_states
             if do_naive_dispatch_combine:
+                # Avoid circular import
+                from vllm.model_executor.layers.quantization.modelopt import (
+                    ModelOptNvFp4FusedMoE,
+                )
+
                 # Check if we should use FP4 quant dispatch
-                print(f"quant method is {self.quant_method}")
                 post_quant_comm = (
                     has_flashinfer_trtllm_fused_moe()
                     and self.quant_method is not None
                     and self.dp_size > 1
                     and self.use_ep
                 )
-                use_fp4_quant_dispatch = (
-                    post_quant_comm
-                    and self.moe_quant_config is not None
-                    and self.moe_quant_config.quant_dtype == "nvfp4"
+                use_fp4_quant_dispatch = post_quant_comm and isinstance(
+                    self.quant_method, ModelOptNvFp4FusedMoE
                 )
                 if use_fp4_quant_dispatch:
                     import flashinfer
