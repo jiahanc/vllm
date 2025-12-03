@@ -1007,10 +1007,11 @@ class GroupCoordinator:
         hidden_states: torch.Tensor,
         router_logits: torch.Tensor,
         is_sequence_parallel: bool = False,
+        extra_tensors: list[torch.Tensor] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if self.device_communicator is not None:
             return self.device_communicator.dispatch(
-                hidden_states, router_logits, is_sequence_parallel
+                hidden_states, router_logits, is_sequence_parallel, extra_tensors
             )
         else:
             return hidden_states, router_logits

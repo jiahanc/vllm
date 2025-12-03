@@ -241,11 +241,11 @@ def flashinfer_cutlass_moe_fp4(
     apply_router_weight_on_input: bool = False,
 ) -> torch.Tensor:
     fused_experts = mk.FusedMoEModularKernel(
-        create_flashinfer_prepare_finalize(use_dp=False),
+        create_flashinfer_prepare_finalize(use_dp=True),
         FlashInferExperts(
             out_dtype=hidden_states.dtype,
             quant_config=quant_config,
-            use_dp=False,
+            use_dp=True,
         ),
     )
 
