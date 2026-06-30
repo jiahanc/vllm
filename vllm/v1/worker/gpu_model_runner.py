@@ -6077,31 +6077,38 @@ class GPUModelRunner(
         logits = self.model.compute_logits(hidden_states)
         num_reqs = logits.size(0)
 
-        dummy_tensors = lambda v: torch.full((num_reqs,), v, device=self.device)
+        def make_dummy_metadata(num_reqs: int) -> SamplingMetadata:
+            def dummy_tensors(v):
+                return torch.full((num_reqs,), v, device=self.device)
 
-        dummy_metadata = SamplingMetadata(
-            temperature=dummy_tensors(0.5),
-            all_greedy=False,
-            all_random=False,
-            top_p=dummy_tensors(0.9),
-            top_k=dummy_tensors(logits.size(1) - 1),
-            generators={},
-            max_num_logprobs=None,
-            logprob_token_ids=None,
-            no_penalties=True,
-            prompt_token_ids=None,
-            frequency_penalties=dummy_tensors(0.1),
-            presence_penalties=dummy_tensors(0.1),
-            repetition_penalties=dummy_tensors(0.1),
-            output_token_ids=[[] for _ in range(num_reqs)],
-            spec_token_ids=[[] for _ in range(num_reqs)],
-            allowed_token_ids_mask=None,
-            bad_words_token_ids={},
-            logitsprocs=LogitsProcessors(),
-        )
-        try:
+            return SamplingMetadata(
+                temperature=dummy_tensors(0.5),
+                all_greedy=False,
+                all_random=False,
+                top_p=dummy_tensors(0.9),
+                top_k=dummy_tensors(logits.size(1) - 1),
+                generators={},
+                max_num_logprobs=None,
+                logprob_token_ids=None,
+                no_penalties=True,
+                prompt_token_ids=None,
+                frequency_penalties=dummy_tensors(0.1),
+                presence_penalties=dummy_tensors(0.1),
+                repetition_penalties=dummy_tensors(0.1),
+                output_token_ids=[[] for _ in range(num_reqs)],
+                spec_token_ids=[[] for _ in range(num_reqs)],
+                allowed_token_ids_mask=None,
+                bad_words_token_ids={},
+                logitsprocs=LogitsProcessors(),
+            )
+
+        def warm_sampler(
+            logits: torch.Tensor,
+            sampling_metadata: SamplingMetadata,
+        ):
             sampler_output = self.sampler(
-                logits=logits, sampling_metadata=dummy_metadata
+                logits=logits,
+                sampling_metadata=sampling_metadata,
             )
             # Also warm forward_native (taken when generators dict is non-empty),
             # but skip the extra call in 'processed_logits' / 'processed_logprobs'
@@ -6117,12 +6124,28 @@ class GPUModelRunner(
                 self.sampler(
                     logits=logits,
                     sampling_metadata=replace(
-                        dummy_metadata,
+                        sampling_metadata,
                         generators={
                             0: torch.Generator(device=self.device).manual_seed(0)
                         },
                     ),
                 )
+            return sampler_output
+
+        dummy_metadata = make_dummy_metadata(num_reqs)
+        try:
+            # Warm small-batch sampler paths too. Top-k/top-p uses a Triton
+            # implementation for batch sizes >= 8, while smaller batches fall
+            # back to PyTorch gather/scatter kernels.
+            for small_num_reqs in (1, 2, 4):
+                if small_num_reqs >= num_reqs:
+                    continue
+                warm_sampler(
+                    logits[:small_num_reqs].clone(),
+                    make_dummy_metadata(small_num_reqs),
+                )
+
+            sampler_output = warm_sampler(logits, dummy_metadata)
         except RuntimeError as e:
             if "out of memory" in str(e):
                 raise RuntimeError(
